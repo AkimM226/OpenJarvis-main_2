@@ -28,6 +28,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: int = 1024
     stream: bool = False
     tools: Optional[List[Dict[str, Any]]] = None
+    agent: Optional[str] = None  # Optional agent name (separate from model name)
 
 
 # ---------------------------------------------------------------------------

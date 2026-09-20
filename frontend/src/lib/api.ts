@@ -386,12 +386,25 @@ export interface ChatResponse {
  * Returns the agent's text response.
  */
 export async function sendChatMessage(text: string): Promise<ChatResponse> {
+  // Get the model from settings, with a fallback to CERBERUS_MODEL from env
+  let model = 'gemini-1.5-pro';  // Default fallback
+  try {
+    const raw = localStorage.getItem('openjarvis-settings');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.cerberusModel) {
+        model = parsed.cerberusModel;
+      }
+    }
+  } catch {}
+
   const res = await apiFetch(`/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages: [{ role: 'user', content: text }],
-      model: 'cerberus_conversational',
+      agent: 'cerberus_conversational',  // Use the separate agent field
+      model: model,                      // Use configurable model name
       stream: false,
     }),
   });
