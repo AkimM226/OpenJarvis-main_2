@@ -409,6 +409,16 @@ class RulesEngine:
             reasons.append(f"Mot-clé bloquant détecté: {blocked_by}")
             return Decision.BLOCKED, "; ".join(reasons), rules_triggered
 
+        # Check trust tier rules BEFORE pricing rules (tier takes precedence)
+        if contact:
+            tier_decision, tier_rules, tier_reason = self._check_trust_tier_rules(
+                action_type, contact
+            )
+            if tier_decision != Decision.AUTO_EXECUTE:
+                rules_triggered.extend(tier_rules)
+                reasons.append(tier_reason)
+                return tier_decision, "; ".join(reasons), rules_triggered
+
         # Check pricing rules if this is a pricing-related action
         if "email_reply" in action_type or "draft" in action_type:
             price_decision, price_rules, price_reason = self._check_pricing_rules(
@@ -418,16 +428,8 @@ class RulesEngine:
                 rules_triggered.extend(price_rules)
                 reasons.append(price_reason)
                 return price_decision, "; ".join(reasons), rules_triggered
-
-        # Check trust tier rules
-        if contact:
-            tier_decision, tier_rules, tier_reason = self._check_trust_tier_rules(
-                action_type, contact
-            )
-            if tier_decision != Decision.AUTO_EXECUTE:
-                rules_triggered.extend(tier_rules)
-                reasons.append(tier_reason)
-                return tier_decision, "; ".join(reasons), rules_triggered
+            # If pricing check passed (AUTO_EXECUTE), continue to other checks
+            # but don't add rules_triggered yet - only return AUTO_EXECUTE if all checks pass
 
         # Check commercial prohibitions
         prohibition_decision, prohibition_rules, prohibition_reason = (
@@ -438,7 +440,11 @@ class RulesEngine:
             reasons.append(prohibition_reason)
             return prohibition_decision, "; ".join(reasons), rules_triggered
 
-        # Default: requires approval for safety
+        # Default: requires approval for safety (conservative approach)
+        # But if we got here with no rules triggered, allow AUTO_EXECUTE
+        if not rules_triggered:
+            return Decision.AUTO_EXECUTE, "", []
+        
         rules_triggered.append("DEFAULT_SAFETY")
         reasons.append("Règle par défaut: validation requise")
         return Decision.REQUIRES_APPROVAL, "; ".join(reasons), rules_triggered
@@ -471,20 +477,28 @@ class RulesEngine:
         text = self._extract_text_content(payload)
         rules: List[str] = []
 
-        # Extract price from text (simple pattern matching)
+        # Extract price from text (improved pattern matching)
         import re
 
-        price_matches = re.findall(r'(\d+)\s*(?:fcfa|xof|f)', text, re.IGNORECASE)
+        # Match prices with spaces (e.g., "30 000 FCFA", "30,000 FCFA", "30000 FCFA")
+        price_matches = re.findall(r'(\d[\d\s\.,]*\d|\d+)\s*(?:fcfa|xof|f)', text, re.IGNORECASE)
         if not price_matches:
             # No price mentioned - this is OK
             return Decision.AUTO_EXECUTE, [], ""
 
-        price = int(price_matches[0])
+        # Clean the price string (remove spaces, commas, dots that are not decimal points)
+        price_str = price_matches[0].replace(' ', '').replace(',', '').replace('.', '')
+        try:
+            price = int(price_str)
+        except ValueError:
+            # If conversion fails, skip pricing check
+            return Decision.AUTO_EXECUTE, [], ""
 
         # Determine service type from context
         service_type = self._detect_service_type(text, payload, contact)
 
         if service_type not in PRICING_RULES:
+            # Unknown service type - require approval rather than block
             rules.append("UNKNOWN_SERVICE_TYPE")
             return (
                 Decision.REQUIRES_APPROVAL,
@@ -494,6 +508,7 @@ class RulesEngine:
 
         rule = PRICING_RULES[service_type]
         floor = rule["floor"]
+        reference = rule["reference"]
 
         if price < floor:
             rules.append("PRICE_BELOW_FLOOR")
@@ -502,6 +517,10 @@ class RulesEngine:
                 rules,
                 f"Prix {price} FCFA sous le plancher {floor} FCFA pour {service_type}",
             )
+
+        # Check if price is exactly the reference price (safe)
+        if price == reference:
+            return Decision.AUTO_EXECUTE, [], ""
 
         # Check if discount is allowed
         if "discounted" in rule and price == rule["discounted"]:
@@ -513,8 +532,13 @@ class RulesEngine:
                 f"Réduction appliquée pour {service_type} - vérifier condition: {rule['discount_condition']}",
             )
 
-        # Price is within allowed range
-        return Decision.AUTO_EXECUTE, [], ""
+        # Price is above reference - require approval
+        rules.append("PRICE_ABOVE_REFERENCE")
+        return (
+            Decision.REQUIRES_APPROVAL,
+            rules,
+            f"Prix {price} FCFA au-dessus de la référence {reference} FCFA pour {service_type}",
+        )
 
     def _detect_service_type(
         self,
@@ -538,7 +562,7 @@ class RulesEngine:
                     return "ia_dev"
                 return "ia_initiation"
 
-        # Check text content
+        # Check text content for service type
         if "arduino" in text_lower:
             return "arduino"
         if "professionnel" in text_lower or "pro" in text_lower:
@@ -548,7 +572,7 @@ class RulesEngine:
         if "ia" in text_lower or "intelligence artificielle" in text_lower:
             return "ia_initiation"
 
-        # Default
+        # Default to "unknown" but don't block - let it be handled as general case
         return "unknown"
 
     def _check_trust_tier_rules(
