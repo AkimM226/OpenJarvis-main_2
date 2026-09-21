@@ -386,8 +386,8 @@ export interface ChatResponse {
  * Returns the agent's text response.
  */
 export async function sendChatMessage(text: string): Promise<ChatResponse> {
-  // Get the model from settings, with a fallback to CERBERUS_MODEL from env
-  let model = 'gemini-1.5-pro';  // Default fallback
+  // Get the model from settings, with fallback to local model for resilience
+  let model = 'qwen2.5-coder:latest';  // Default to local model for reliability
   try {
     const raw = localStorage.getItem('openjarvis-settings');
     if (raw) {
