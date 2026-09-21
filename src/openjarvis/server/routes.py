@@ -108,13 +108,10 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     model = request_body.model
     agent_name = request_body.agent
 
-    # If an agent is explicitly specified, use it; otherwise check if model is an agent name
+    # If an agent is explicitly specified, use it with the provided model
     from openjarvis.core.registry import AgentRegistry
     if agent_name and AgentRegistry.contains(agent_name):
         agent = AgentRegistry.get(agent_name)(engine=engine, model=model, bus=getattr(request.app.state, "bus", None))
-    elif AgentRegistry.contains(model):
-        # Backward compatibility: if model field contains an agent name, use it
-        agent = AgentRegistry.get(model)(engine=engine, model=model, bus=getattr(request.app.state, "bus", None))
     else:
         agent = getattr(request.app.state, "agent", None)
 
